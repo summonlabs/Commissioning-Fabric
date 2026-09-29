@@ -1,0 +1,39 @@
+# Build trees
+build/
+build-*/
+out/
+install/
+_stage/
+CMakeUserPresets.json
+
+# Compiler and linker output
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.so
+*.dylib
+*.a
+
+# Editor and IDE state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Test and benchmark scratch
+Testing/
+test-output/
+*.log
+
+# Fabric store directories created by local runs
+cxf-store/
+*.cxf-store/
+fabric.journal
+fabric.snapshot
+fabric.lock
