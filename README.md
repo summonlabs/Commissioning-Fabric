@@ -1,13 +1,11 @@
 # Commissioning Fabric
 
-Commissioning Fabric is the governed-commissioning authority of the Data Center
-Control Plane (DCCP). It decides whether a physical facility asset may enter
+Commissioning Fabric is the governed-commissioning authority. It decides whether a physical facility asset may enter
 service, records exactly which evidence supported that decision, and issues a
 bounded, single-use activation permission that is fenced by every generation it
 depends on.
 
-It is DCCP repository 33 of 72 and implements Tranche 5, Physical Fleet
-Lifecycle. The implementation is C++20 with no third-party runtime
+The implementation is C++20 with no third-party runtime
 dependencies, builds with CMake, and installs a namespaced imported target
 (`summon::commissioning_fabric`) for downstream consumption.
 
