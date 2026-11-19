@@ -17,7 +17,9 @@ param(
   [Parameter(Mandatory = $true)][string]$RepoRoot,
   [Parameter(Mandatory = $true)][string]$StageDir,
   [string]$BuildDir = "",
-  [string]$Config = ""
+  [string]$Config = "",
+  [string]$ConsumerCxxFlags = "",
+  [string]$ConsumerLinkFlags = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,20 +53,35 @@ if (-not (Test-Path $installedHeader)) {
 Write-Output 'package-validation: configuring the downstream consumer'
 $downstream = Join-Path $RepoRoot 'tests/downstream'
 
-# The consumer is configured in a shell that has no compiler environment, so on
-# Windows the multi-config Visual Studio generator is used: it locates its own
-# toolchain. Elsewhere Ninja is used with whatever toolchain the environment
-# provides.
+# The consumer is built in the configuration the library was built in: a Debug
+# library and a Release consumer use different runtime libraries and do not
+# link (LNK2038).
+$libraryConfig = 'Release'
+if (-not [string]::IsNullOrEmpty($Config)) { $libraryConfig = $Config }
+
+# In a shell that has no compiler environment the multi-config Visual Studio
+# generator is used on Windows: it locates its own toolchain. In a developer
+# shell, and everywhere else, Ninja is used with the toolchain the environment
+# provides, which is the one the library was built with.
 # Windows PowerShell 5.1 has no $IsWindows, so the platform is detected from
 # the environment variable every supported Windows shell sets.
-$consumerConfig = 'Release'
-if ($env:OS -eq 'Windows_NT') {
+$consumerConfig = $libraryConfig
+if ($env:OS -eq 'Windows_NT' -and [string]::IsNullOrEmpty($env:VSCMD_VER)) {
   $configureArgs = @('-S', $downstream, '-B', $consumerBuild, '-G', 'Visual Studio 17 2022', '-A', 'x64',
                      "-DCMAKE_PREFIX_PATH=$prefix")
 } else {
-  $configureArgs = @('-S', $downstream, '-B', $consumerBuild, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
-                     "-DCMAKE_PREFIX_PATH=$prefix")
+  $configureArgs = @('-S', $downstream, '-B', $consumerBuild, '-G', 'Ninja',
+                     "-DCMAKE_BUILD_TYPE=$libraryConfig", "-DCMAKE_PREFIX_PATH=$prefix")
   $consumerConfig = ''
+}
+# A library built with a sanitizer links only into a consumer built with it.
+if (-not [string]::IsNullOrEmpty($ConsumerCxxFlags)) {
+  $configureArgs += "-DCMAKE_CXX_FLAGS_INIT=$ConsumerCxxFlags"
+}
+if (-not [string]::IsNullOrEmpty($ConsumerLinkFlags)) {
+  # The per-configuration link flags come last on the link line, so this is
+  # where a flag such as /INCREMENTAL:NO has to go to take effect.
+  $configureArgs += "-DCMAKE_EXE_LINKER_FLAGS_$($libraryConfig.ToUpperInvariant())=$ConsumerLinkFlags"
 }
 & cmake @configureArgs
 if ($LASTEXITCODE -ne 0) { Write-Error 'downstream configure failed'; exit 1 }

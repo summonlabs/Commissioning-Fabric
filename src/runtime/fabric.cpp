@@ -1247,10 +1247,11 @@ struct Fabric::Impl {
 
     refresh_stats();
     if (journal.bytes() > options.snapshot_threshold_bytes) {
-      const Status published = checkpoint();
-      if (published.failed()) {
-        return published;
-      }
+      // The group is durable and applied: the commit stands. A checkpoint that
+      // cannot be published now (a reader holds the snapshot) does not turn it
+      // into a failure; the journal still holds the group, and the next commit
+      // tries the checkpoint again.
+      static_cast<void>(checkpoint());
     }
     return Status::success();
   }

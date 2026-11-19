@@ -308,17 +308,25 @@ struct FileBytes {
     }                                                                         \
   } while (false)
 
-#define CHECK_EQ(left, right)                                                       \
-  do {                                                                              \
-    ::cxf::test::note_check();                                                      \
-    const auto& cxf_left_value = (left);                                            \
-    const auto& cxf_right_value = (right);                                          \
-    if (!(cxf_left_value == cxf_right_value)) {                                     \
-      ::cxf::test::fail_check(__FILE__, __LINE__, "CHECK_EQ", #left " == " #right,  \
-                              ::cxf::test::describe_pair(cxf_left_value,            \
-                                                         cxf_right_value));         \
-    }                                                                               \
-  } while (false)
+namespace cxf::test {
+
+/// Compares the two operands of CHECK_EQ. Both are evaluated in the call
+/// expression, so every temporary an operand depends on (a view into a
+/// temporary string, a member of a temporary result) is still alive while they
+/// are compared and described.
+template <typename Left, typename Right>
+void check_equal(const char* file, int line, std::string_view text, const Left& left,
+                 const Right& right) {
+  note_check();
+  if (!(left == right)) {
+    fail_check(file, line, "CHECK_EQ", text, describe_pair(left, right));
+  }
+}
+
+}  // namespace cxf::test
+
+#define CHECK_EQ(left, right) \
+  ::cxf::test::check_equal(__FILE__, __LINE__, #left " == " #right, (left), (right))
 
 #define REQUIRE(expression)                                                      \
   do {                                                                           \

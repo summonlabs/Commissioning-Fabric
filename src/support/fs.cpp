@@ -552,11 +552,28 @@ Status write_file_atomic(const Path& path, std::span<const std::byte> bytes) {
     static_cast<void>(remove_file(staging));
     return to.status();
   }
-  if (MoveFileExW(from.value().c_str(), to.value().c_str(),
-                  MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+  // While a reader has the target open (an inspection, a backup, an antivirus or
+  // indexing scan) the replace fails until the reader closes it, so it is
+  // retried for a bounded time (about 2 s). A directory or a read-only file in
+  // the way is not transient and fails at once.
+  for (int attempt = 0;; ++attempt) {
+    if (MoveFileExW(from.value().c_str(), to.value().c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0) {
+      break;
+    }
     const unsigned long code = GetLastError();
-    static_cast<void>(remove_file(staging));
-    return io_error("MoveFileEx failed", path, internal::win_error_message(code));
+    const unsigned long attributes = GetFileAttributesW(to.value().c_str());
+    const bool blocked =
+        attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_READONLY)) != 0;
+    const bool transient = (code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION ||
+                            code == ERROR_LOCK_VIOLATION) &&
+                           !blocked;
+    if (!transient || attempt >= 100) {
+      static_cast<void>(remove_file(staging));
+      return io_error("MoveFileEx failed", path, internal::win_error_message(code));
+    }
+    Sleep(20);
   }
   return sync_directory(directory);
 }

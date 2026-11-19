@@ -48,6 +48,18 @@ add_test(NAME cxf.e2e_cli COMMAND cxf_cli_tests)
 # prefix and then configures, builds and runs an independent out-of-tree consumer
 # against it with find_package. It needs the CMake executable and the build tree,
 # so it is a script test rather than an in-process one.
+# A library built with a sanitizer links only into a consumer built with it, so
+# the consumer is given the same sanitizer flags.
+set(cxf_package_consumer_flags)
+if(CXF_ENABLE_ASAN)
+  if(MSVC)
+    list(APPEND cxf_package_consumer_flags -ConsumerCxxFlags "/fsanitize=address /Zi"
+         -ConsumerLinkFlags "/INCREMENTAL:NO /DEBUG")
+  else()
+    list(APPEND cxf_package_consumer_flags -ConsumerCxxFlags "-fsanitize=address"
+         -ConsumerLinkFlags "-fsanitize=address")
+  endif()
+endif()
 add_test(
   NAME cxf.package
   COMMAND
@@ -55,5 +67,5 @@ add_test(
     "CXF_CLI=$<TARGET_FILE:commissioning-fabric>" pwsh -NoProfile -File
     "${CMAKE_SOURCE_DIR}/tools/validate-package.ps1" -RepoRoot "${CMAKE_SOURCE_DIR}"
     -BuildDir "${CMAKE_BINARY_DIR}" -Config "$<CONFIG>" -StageDir
-    "${CMAKE_BINARY_DIR}/package-validation"
+    "${CMAKE_BINARY_DIR}/package-validation" ${cxf_package_consumer_flags}
 )

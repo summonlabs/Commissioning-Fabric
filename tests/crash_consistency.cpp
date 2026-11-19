@@ -17,11 +17,15 @@
 #include "cxf/support/clock.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -340,6 +344,91 @@ CXF_TEST(crash, real_process_death_recovers_one_generation) {
     CHECK_EQ(again.commit, recovered.commit);
     CHECK_EQ(again.candidates, recovered.candidates);
   }
+}
+
+CXF_TEST(crash, a_checkpoint_waits_for_a_reader_of_the_snapshot) {
+  cxf::test::TempDirectory home("checkpoint-wait");
+  REQUIRE(home.ok());
+  const std::string store = home.child("store");
+  {
+    cxf::ManualClock clock(Timestamp::from_unix_seconds(kBase));
+    FabricOptions options;
+    options.directory = store;
+    options.holder = "checkpoint-wait";
+    cxf::Outcome<Fabric> fabric = Fabric::open(options, clock);
+    REQUIRE_OK(fabric);
+    cxf::AdmitCandidateRequest request;
+    request.name = child_candidate_name("wait", 0);
+    request.declaration = declaration_of(request.name);
+    REQUIRE_OK(fabric->admit_candidate(request));
+    // The first checkpoint publishes the snapshot the reader then opens.
+    REQUIRE(fabric->checkpoint().ok());
+
+    // A reader has the snapshot open for a moment (an inspection, a backup, a
+    // scan) while the next checkpoint replaces it.
+    std::ifstream reader(std::filesystem::path(store) / "fabric.snapshot", std::ios::binary);
+    const bool reader_open = static_cast<bool>(reader);
+    std::thread release([&reader] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      reader.close();
+    });
+    const cxf::Status checkpointed = fabric->checkpoint();
+    release.join();
+    CHECK(reader_open);
+    CHECK(checkpointed.ok());
+  }
+  Recovered recovered;
+  REQUIRE(reopen_and_verify(store, recovered));
+  CHECK(recovered.verified);
+  CHECK_EQ(recovered.candidates, std::uint64_t{1});
+}
+
+CXF_TEST(crash, a_committed_request_is_not_reported_as_failed_for_its_checkpoint) {
+  cxf::test::TempDirectory home("checkpoint-held");
+  REQUIRE(home.ok());
+  const std::string store = home.child("store");
+  std::uint64_t committed = 0;
+  {
+    cxf::ManualClock clock(Timestamp::from_unix_seconds(kBase));
+    FabricOptions options;
+    options.directory = store;
+    options.holder = "checkpoint-held";
+    // A tiny threshold: every commit is followed by a checkpoint.
+    options.snapshot_threshold_bytes = 256;
+    cxf::Outcome<Fabric> fabric = Fabric::open(options, clock);
+    REQUIRE_OK(fabric);
+    const auto admit = [&fabric](std::uint64_t index) {
+      cxf::AdmitCandidateRequest request;
+      request.name = child_candidate_name("held", index);
+      request.declaration = declaration_of(request.name);
+      return fabric->admit_candidate(request);
+    };
+    REQUIRE_OK(admit(0));
+    REQUIRE_OK(admit(1));
+    const std::filesystem::path snapshot = std::filesystem::path(store) / "fabric.snapshot";
+    REQUIRE(std::filesystem::exists(snapshot));
+    {
+      // The reader keeps the snapshot open while a request is committed: the
+      // checkpoint that follows the commit cannot replace the snapshot.
+      std::ifstream reader(snapshot, std::ios::binary);
+      CHECK(static_cast<bool>(reader));
+      const std::uint64_t before = fabric->meta().commit.value();
+      const cxf::Outcome<cxf::RequestOutcome> held = admit(2);
+      // The request is committed and applied. It is not reported as failed
+      // because the snapshot could not be replaced afterwards.
+      CHECK(held.ok());
+      CHECK(fabric->meta().commit.value() > before);
+    }
+    // With the reader gone the next commit checkpoints again.
+    CHECK(admit(3).ok());
+    committed = fabric->meta().commit.value();
+  }
+  Recovered recovered;
+  REQUIRE(reopen_and_verify(store, recovered));
+  CHECK(recovered.verified);
+  CHECK_EQ(recovered.candidates, std::uint64_t{4});
+  CHECK(recovered.commit >= committed);
+  CHECK(recovered.snapshot_bytes > 0);
 }
 
 CXF_TEST(crash, crash_between_snapshot_publication_and_journal_reset) {
